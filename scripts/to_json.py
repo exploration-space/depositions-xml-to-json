@@ -49,10 +49,7 @@ def main():
 			creation_node = tei_soup.find('creation')
 			
 			if creation_node.date.has_attr('when'):
-				date_decomp = creation_node.date['when'].split('_')
-				deposition_dict['creation_year'] = int(date_decomp[0])
-				deposition_dict['creation_month'] = int(date_decomp[1])
-				deposition_dict['creation_day'] = int(date_decomp[2])
+				deposition_dict['creation_date'] = creation_node.date['when'].replace('_','-').strip()
 
 			place_dict = {}
 
