@@ -4,9 +4,21 @@ from bs4 import BeautifulSoup
 import datetime
 import json
 
+import geocoder
+
+from ratelimit import limits, sleep_and_retry
+
+ONE_HOUR = 3600
+
 
 import pprint
 pp = pprint.PrettyPrinter(indent=4)
+
+@sleep_and_retry
+@limits(calls=950, period=ONE_HOUR)
+def get_geocoding(query_str, geonames_user):
+	q = geocoder.geonames(query_str, key=geonames_user, featureClass='P', country='IE', fuzzy=0.6, orderby='relevance')
+	return q
 
 
 def parse_keywords_list(path_to_file):
@@ -22,18 +34,23 @@ def parse_keywords_list(path_to_file):
 
 def main():
 	dep_base_dir = Path(sys.argv[1])
+	geonames_user = sys.argv[2]
 
 	Path('./converted_json').mkdir(exist_ok=True) 
 	converted_files_path = Path('./converted_json')
 	
 	keywords_dict = parse_keywords_list(dep_base_dir / 'keywords.xml')
 
-	xml = dep_base_dir.glob("**/dep_8*.xml")
+	xml_list = list(dep_base_dir.glob("**/dep_8*.xml"))
+
+	n_files = len(xml_list)
 
 	depositions_parsed = []
 
-	for xml_path in sorted(list(xml)):
-		print(xml_path)
+	for i, xml_path in enumerate(sorted(xml_list)):
+		if i % 50 == 0:
+			print('Completed %s of files' % ((float(i) / n_files) * 100 ))
+		
 		with xml_path.open(mode='r') as xml_file:
 			tei_soup = BeautifulSoup(xml_file, 'lxml-xml')
 			
@@ -51,13 +68,10 @@ def main():
 			if creation_node.date.has_attr('when'):
 				deposition_dict['creation_date'] = creation_node.date['when'].replace('_','-').strip()
 
-			place_dict = {}
-
 			for j in creation_node.placeName.find_all(recursive=False):
 				# print(j.name, j.contents)
-				place_dict[j.name] = " ".join(j.contents)
+				deposition_dict[j.name] = " ".join(j.contents)
 			
-			deposition_dict['creation_place'] = place_dict
 
 			for keywords_node in tei_soup.find_all('keywords'):
 				list_node = keywords_node.list
@@ -84,11 +98,19 @@ def main():
 				person_dict['sex'] = person_node['sex']
 
 				if person_node.residence:
-					residence_dict = {}
-					for j in person_node.residence.find_all(recursive=False):
-						residence_dict[j.name] = " ".join(j.contents)
-					person_dict['residence'] = residence_dict
+					deposition_dict['deponent_town'] = person_node.residence.placeName.get_text()
+					deposition_dict['deponent_county'] = person_node.residence.region.get_text()
 
+					if deposition_dict['deponent_town'] is not None and len(deposition_dict['deponent_town']) > 0:
+						
+						query_str = '%s' % (deposition_dict['deponent_town'])
+						g = get_geocoding(query_str, geonames_user)
+
+						deposition_dict['deponent_town_lat'] = g.lat
+						deposition_dict['deponent_town_lng'] = g.lng
+						deposition_dict['deponent_town_geonames_id'] = g.geonames_id
+						deposition_dict['deponent_town_geonames_fuzziness'] = 0.6
+				
 				people_list.append(person_dict)
 
 			deposition_dict['people_list'] = people_list
@@ -120,8 +142,8 @@ def main():
 
 
 if __name__ == "__main__":
-	if len(sys.argv) < 2: 
-		print('Invalid number of arguments. Please provide the path to the root folder of the 1641 Depositions XML')
+	if len(sys.argv) < 3: 
+		print('Invalid number of arguments. Please provide the path to the root folder of the 1641 Depositions XML and your geonames user')
 		exit(0)
 	else:
 		main()
